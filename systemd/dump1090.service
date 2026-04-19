@@ -1,0 +1,11 @@
+[Unit]
+Description=dump1090 ADS-B receiver
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/dump1090 --net --quiet --write-json /run/dump1090 --lat 42.346417 --lon -71.742543 --device 00000001
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

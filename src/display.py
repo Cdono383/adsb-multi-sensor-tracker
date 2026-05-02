@@ -715,6 +715,52 @@ long_press_start = None
 long_press_pos = None
 LONG_PRESS_MS = 800
 
+def finger_to_surface(fx, fy):
+    """Convert normalized FINGERDOWN coords (0-1) to logical surface pixel coords.
+    The surface is rendered at 800x480, rotated 90° CCW, then scaled to 720x1280.
+    This reverses that transform so touch coords map correctly to surface space.
+    """
+    mx = int((1.0 - fy) * SCREEN_W)
+    my = int(fx * SCREEN_H)
+    return mx, my
+
+def handle_click(mx, my, aircraft, gps):
+    """Handle a click/touch at logical surface coordinates (mx, my)."""
+    global unit_index, display_mode_index, panel_view_index
+    global selected_hex, MAX_RANGE_NM, long_press_start, long_press_pos
+
+    cx = RADAR_X + RADAR_W // 2
+    cy = TOP_BAR_H + RADAR_H // 2
+    radius = min(RADAR_W, RADAR_H) // 2 - 28
+
+    if RADAR_X < mx < RADAR_X + 160 and SCREEN_H - 28 < my < SCREEN_H:
+        unit_index = (unit_index + 1) % len(UNITS)
+    elif SCREEN_W - 120 < mx < SCREEN_W and SCREEN_H - 28 < my < SCREEN_H:
+        display_mode_index = (display_mode_index + 1) % len(DISPLAY_MODES)
+    elif 0 < mx < PANEL_W and TOP_BAR_H < my < TOP_BAR_H + 24:
+        tab_w = PANEL_W // len(PANEL_VIEWS)
+        panel_view_index = min(mx // tab_w, len(PANEL_VIEWS) - 1)
+    elif mx > RADAR_X and gps["fix"]:
+        best_hex = None
+        best_dist = 20
+        for ac in aircraft:
+            if "lat" not in ac or "lon" not in ac:
+                continue
+            x, y, dist_nm, _ = lat_lon_to_radar(
+                ac["lat"], ac["lon"],
+                gps["lat"], gps["lon"],
+                cx, cy, radius
+            )
+            sd = math.sqrt((mx - x)**2 + (my - y)**2)
+            if sd < best_dist:
+                best_dist = sd
+                best_hex = ac.get("hex")
+        selected_hex = best_hex
+        if best_hex:
+            panel_view_index = PANEL_VIEWS.index("CONTACTS")
+    long_press_start = pygame.time.get_ticks()
+    long_press_pos = (mx, my)
+
 def handle_events(events, aircraft, gps):
     global unit_index, display_mode_index, panel_view_index
     global selected_hex, MAX_RANGE_NM
@@ -745,37 +791,20 @@ def handle_events(events, aircraft, gps):
             if event.key == pygame.K_r:
                 MAX_RANGE_NM = 50
 
+        # Mouse click (desktop/testing)
         if event.type == pygame.MOUSEBUTTONDOWN:
             mx, my = event.pos
-            if RADAR_X < mx < RADAR_X + 160 and SCREEN_H - 28 < my < SCREEN_H:
-                unit_index = (unit_index + 1) % len(UNITS)
-            elif SCREEN_W - 120 < mx < SCREEN_W and SCREEN_H - 28 < my < SCREEN_H:
-                display_mode_index = (display_mode_index + 1) % len(DISPLAY_MODES)
-            elif 0 < mx < PANEL_W and TOP_BAR_H < my < TOP_BAR_H + 24:
-                tab_w = PANEL_W // len(PANEL_VIEWS)
-                panel_view_index = min(mx // tab_w, len(PANEL_VIEWS) - 1)
-            elif mx > RADAR_X and gps["fix"]:
-                best_hex = None
-                best_dist = 20
-                for ac in aircraft:
-                    if "lat" not in ac or "lon" not in ac:
-                        continue
-                    x, y, dist_nm, _ = lat_lon_to_radar(
-                        ac["lat"], ac["lon"],
-                        gps["lat"], gps["lon"],
-                        cx, cy, radius
-                    )
-                    sd = math.sqrt((mx - x)**2 + (my - y)**2)
-                    if sd < best_dist:
-                        best_dist = sd
-                        best_hex = ac.get("hex")
-                selected_hex = best_hex
-                if best_hex:
-                    panel_view_index = PANEL_VIEWS.index("CONTACTS")
-            long_press_start = pygame.time.get_ticks()
-            long_press_pos = (mx, my)
+            handle_click(mx, my, aircraft, gps)
 
         if event.type == pygame.MOUSEBUTTONUP:
+            long_press_start = None
+
+        # Touchscreen finger events
+        if event.type == pygame.FINGERDOWN:
+            mx, my = finger_to_surface(event.x, event.y)
+            handle_click(mx, my, aircraft, gps)
+
+        if event.type == pygame.FINGERUP:
             long_press_start = None
 
     if long_press_start:
@@ -793,7 +822,8 @@ def main():
     global heartbeat
 
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    surface = pygame.Surface((SCREEN_W, SCREEN_H))
     pygame.display.set_caption("ADS-B Tracker")
     clock = pygame.time.Clock()
 
@@ -812,7 +842,10 @@ def main():
                 pygame.quit()
                 return
         progress = (time.time() - boot_start) / BOOT_DURATION
-        draw_boot_screen(screen, fonts, progress)
+        draw_boot_screen(surface, fonts, progress)
+        rotated = pygame.transform.rotate(surface, 90)
+        scaled = pygame.transform.scale(rotated, (720, 1280))
+        screen.blit(scaled, (0, 0))
         pygame.display.flip()
         clock.tick(FPS)
 
@@ -838,10 +871,13 @@ def main():
             heartbeat = not heartbeat
             hb_timer = 0
 
-        screen.fill(C("BG"))
-        draw_top_bar(screen, fonts, gps, heartbeat)
-        draw_panel(screen, fonts, ac, dr, gps)
-        draw_radar(screen, fonts, ac, gps, frame)
+        surface.fill(C("BG"))
+        draw_top_bar(surface, fonts, gps, heartbeat)
+        draw_panel(surface, fonts, ac, dr, gps)
+        draw_radar(surface, fonts, ac, gps, frame)
+        rotated = pygame.transform.rotate(surface, 90)
+        scaled = pygame.transform.scale(rotated, (720, 1280))
+        screen.blit(scaled, (0, 0))
         pygame.display.flip()
         clock.tick(FPS)
         frame += 1

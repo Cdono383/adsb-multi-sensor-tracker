@@ -153,6 +153,10 @@ radar_events = deque()
 correlations = deque()
 corr_log = []
 rf_flash_timer = 0
+shutdown_pending = False
+shutdown_pending_time = 0
+gps_reset_pending = False
+gps_reset_pending_time = 0
 
 # ─────────────────────────────────────────
 # CORRELATION LOG PERSISTENCE
@@ -572,6 +576,35 @@ def draw_panel_system(surface, fonts, gps, y):
 
     surface.blit(ft.render(f"CORR LOG {len(corr_log)} events", True, C("PRIMARY_DIM")), (6, y))
 
+    # ── Fixed-position buttons anchored to bottom of panel ──
+    now = time.time()
+
+    # GPS RESET button at fixed y = SCREEN_H - 84
+    gps_y = SCREEN_H - 84
+    if gps_reset_pending and now - gps_reset_pending_time < 3:
+        flash = int(now * 2) % 2 == 0
+        col = C("CORR_MED") if flash else C("PRIMARY_DIM")
+        pygame.draw.rect(surface, C("PRIMARY_DARK"), (4, gps_y, PANEL_W - 8, 28))
+        pygame.draw.rect(surface, col, (4, gps_y, PANEL_W - 8, 28), 2)
+        surface.blit(fonts["small"].render("TAP AGAIN TO RESET GPS", True, col), (8, gps_y + 6))
+    else:
+        pygame.draw.rect(surface, C("DARK_GRAY"), (4, gps_y, PANEL_W - 8, 28))
+        pygame.draw.rect(surface, C("PRIMARY_DIM"), (4, gps_y, PANEL_W - 8, 28), 1)
+        surface.blit(fonts["small"].render("GPS RESET", True, C("PRIMARY_DIM")), (8, gps_y + 6))
+
+    # SHUTDOWN button at fixed y = SCREEN_H - 48
+    shut_y = SCREEN_H - 48
+    if shutdown_pending and now - shutdown_pending_time < 3:
+        flash = int(now * 2) % 2 == 0
+        col = C("ALERT") if flash else C("ALERT_DIM")
+        pygame.draw.rect(surface, C("ALERT_DIM"), (4, shut_y, PANEL_W - 8, 28))
+        pygame.draw.rect(surface, col, (4, shut_y, PANEL_W - 8, 28), 2)
+        surface.blit(fonts["small"].render("TAP AGAIN TO SHUTDOWN", True, col), (8, shut_y + 6))
+    else:
+        pygame.draw.rect(surface, C("DARK_GRAY"), (4, shut_y, PANEL_W - 8, 28))
+        pygame.draw.rect(surface, C("GRAY"), (4, shut_y, PANEL_W - 8, 28), 1)
+        surface.blit(fonts["small"].render("SHUTDOWN", True, C("GRAY")), (8, shut_y + 6))
+
 # ─────────────────────────────────────────
 # RADAR
 # ─────────────────────────────────────────
@@ -728,10 +761,40 @@ def handle_click(mx, my, aircraft, gps):
     """Handle a click/touch at logical surface coordinates (mx, my)."""
     global unit_index, display_mode_index, panel_view_index
     global selected_hex, MAX_RANGE_NM, long_press_start, long_press_pos
+    global shutdown_pending, shutdown_pending_time
+    global gps_reset_pending, gps_reset_pending_time
 
     cx = RADAR_X + RADAR_W // 2
     cy = TOP_BAR_H + RADAR_H // 2
     radius = min(RADAR_W, RADAR_H) // 2 - 28
+
+    if panel_view_index == PANEL_VIEWS.index("SYSTEM") and 0 < mx < PANEL_W:
+        now = time.time()
+
+        # GPS RESET button hit area
+        if SCREEN_H - 84 < my < SCREEN_H - 56:
+            if gps_reset_pending and now - gps_reset_pending_time < 3:
+                subprocess.run(["sudo", "systemctl", "restart", "gps-service"])
+                gps_reset_pending = False
+            else:
+                gps_reset_pending = True
+                gps_reset_pending_time = now
+            shutdown_pending = False
+            return
+
+        # SHUTDOWN button hit area
+        if SCREEN_H - 48 < my < SCREEN_H - 20:
+            if shutdown_pending and now - shutdown_pending_time < 3:
+                subprocess.run(["sudo", "shutdown", "now"])
+            else:
+                shutdown_pending = True
+                shutdown_pending_time = now
+            gps_reset_pending = False
+            return
+
+    # Reset pending states if tapping elsewhere
+    shutdown_pending = False
+    gps_reset_pending = False
 
     if RADAR_X < mx < RADAR_X + 160 and SCREEN_H - 28 < my < SCREEN_H:
         unit_index = (unit_index + 1) % len(UNITS)
